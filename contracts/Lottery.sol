@@ -4,117 +4,162 @@ pragma solidity ^0.8.9;
 // Import this file to use console.log
 import "hardhat/console.sol";
 
+struct Player {
+    bool    exists;     /* "Exists?" flag       */
+    uint256 serial;     /* Unique player id     */
+    address address_;   /* Player address       */
+    uint256 value;      /* Value that was bet   */
+    bytes32 hash_;      /* Hash that was sent   */
+    bool    revealed;   /* "Has revealed?" flag */
+}
+
 contract Lottery {
 
-    bool private open = false;
+    enum State { OPEN, CLOSED }
+
+    State private state;
 
     uint256 private round;
-    address private owner;
-    uint256 private ownerFee;
-    uint256 private ticketPrice;
-
-    uint256 private balance;
-
     uint256 private random;
+    uint256 private fee_balance;
+    uint256 private pot_balance;
 
-    mapping(uint256 => mapping(address => bytes32)) registers;
-    mapping(uint256 => mapping(address => bool)) revealers;
-    mapping(uint256 => address[]) players;
+    address private owner;
+    uint256 private owner_fee;
+    uint256 private ticket_price;
 
-    uint256 numBetters;
-    uint256 numPlayers;
+    uint256 private block_when_closed;
+
+    uint256 private number_bettors;
+    uint256 private number_contenders;
+
+    mapping(uint256 => mapping(address => Player)) private bettors;
+    mapping(uint256 => address[]) private contenders;
 
     constructor(uint256 price, uint256 fee) {
-        require(fee > 0 && fee < 100, "Fee should be between 0 and 100.");
-        require(price > 0, "Ticket price should be larger than zero.");
+        require(fee > 0 && fee < 100,                       "Owner fee must lie between 0 and 100.");
+        require(price > 0,                                  "Ticket price must be larger than zero.");
 
+        // Initialize parametrized variables
+        owner = msg.sender;
+        owner_fee = fee;
+        ticket_price = price;
+
+        // Initialize basic control variables
         round = 0;
         random = 0;
-        balance = 0;
-        numBetters = 0;
-        numPlayers = 0;
-        open = true;
-        ownerFee = fee;
-        owner = msg.sender;
-        ticketPrice = price;
+        fee_balance = 0;
+        pot_balance = 0;
+        state = State.OPEN;
+        number_bettors = 0;
+        number_contenders = 0;
+        block_when_closed = 0;
     }
 
-    function placeBet(bytes32 hashed) external payable {
-        require(open, "Bets are closed right now.");
-        require(msg.value >= ticketPrice, "Minimum ticket price was not met.");
-        registers[round][msg.sender] = hashed;
-        revealers[round][msg.sender] = false;
-        balance += msg.value;
-        numBetters += 1;
+    /* ========= MAIN PUBLIC FUNCTIONS ================== */
 
-        if (numBetters >= 10)
-            __closeBets();
+    function bet(bytes32 hash_) external payable {
+        require(state == State.OPEN,                        "Bets must be open.");
+        require(msg.value >= ticket_price,                  "Bet value must meet ticket price.");
+
+        Player storage player = bettors[round][msg.sender];
+
+        require(player.exists == false,                     "A previous bet must not exist.");
+
+        // Write player data to storage
+        player.address_ = msg.sender;
+        player.value = msg.value;
+        player.revealed = false;
+        player.exists = true;
+        player.hash_ = hash_;
+        number_bettors++;
+
+        // Update balances
+        uint256 fee = msg.value * owner_fee / 100;
+        fee_balance += fee;
+        pot_balance += msg.value - fee;
+
+        if (number_bettors >= 10)
+            __close_round();
     }
 
-    function reveal(uint256 N) external {
-        require(!open, "Bets are still open.");
-        require(registers[round][msg.sender] == __getHash(N, msg.sender), "Hash not registered.");
-        require(!revealers[round][msg.sender], "Only allowed to reveal once.");
+    function reveal(uint256 n) external {
+        require(state == State.CLOSED,                      "Bets must be closed.");
 
-        revealers[round][msg.sender] = true;
-        players[round].push(msg.sender);
-        random = random ^ N;
-        numPlayers += 1;
+        Player storage player = bettors[round][msg.sender];
 
-        if (numPlayers >= numBetters / 2)
-            __awardPrize();
+        require(player.exists == true,                      "A previous bet must exist.");
+        require(player.revealed == false,                   "May reveal only once.");
+        require(player.hash_ == __get_hash(n, msg.sender),  "Number 'n' must match previous bet.");
+
+        player.revealed = true;
+        random = random ^ n;
+        contenders[round].push(msg.sender);
+        number_contenders++;
     }
 
-    function __awardPrize() internal {
-        require(numPlayers > 0, "At least one player must have revealed.");
-        address winner = players[round][random % numPlayers];
-        uint256 fees = balance * ownerFee / 100;
-        payable(winner).transfer(balance - fees);
-        payable(owner).transfer(fees);
-        __resetRound();
+    function draw_winner() public {
+        require(state == State.CLOSED,                      "Bets must be closed.");
+        require(number_contenders > 0,                      "Must have at least one contender.");
+        require(block.number >= block_when_closed + 10,     "Must wait for 10 blocks after closed.");
+
+        uint256 winner_number = random % number_contenders;
+        address winner = contenders[round][winner_number];
+        payable(winner).transfer(pot_balance);
+
+        __reset_round();
     }
 
-    function __resetRound() private {
-        require(!open, "Bets are still open.");
+    /* ========= INTERNAL HELPER FUNCTIONS ============== */
+
+    function __close_round() internal {
+        require(state == State.OPEN,                        "Bets must be open.");
+        state = State.CLOSED;
+        block_when_closed = block.number;
+    }
+
+    function __reset_round() internal {
+        require(state == State.CLOSED,                      "Bets must be closed.");
         round += 1;
         random = 0;
-        balance = 0;
-        numBetters = 0;
-        numPlayers = 0;
-        open = true;
+        pot_balance = 0;
+        state = State.OPEN;
+        number_bettors = 0;
+        number_contenders = 0;
     }
 
-    function __closeBets() internal {
-        require(open, "Bets are already closed.");
-        open = false;
+    function __get_hash(uint256 n, address sender) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(n, sender));
     }
 
-    function __getHash(uint256 N, address sender) internal pure returns (bytes32) {
-        return keccak256(abi.encode(N, sender));
+    /* ========= PUBLIC GETTERS ========================= */
+
+    function isOpen() public view returns (bool) {
+        return state == State.OPEN;
     }
 
-    /* public getters */
+    function getRound() public view returns (uint256) {
+        return round;
+    }
 
     function getOwner() public view returns (address) {
         return owner;
     }
 
-    function getFee() public view returns (uint256) {
-        return ownerFee;
+    function getOwnerFee() public view returns (uint256) {
+        return owner_fee;
     }
 
-    function getPrice() public view returns (uint256) {
-        return ticketPrice;
+    function getTicketPrice() public view returns (uint256) {
+        return ticket_price;
     }
 
-    function getBalance() public view returns (uint256) {
-        return balance;
+    function getPotBalance() public view returns (uint256) {
+        return pot_balance;
     }
 
-    function isOpen() public view returns (bool) {
-        return open;
+    function getFeeBalance() public view returns (uint256) {
+        return fee_balance;
     }
-
-    /* public getters */
 
 }
