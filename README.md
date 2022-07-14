@@ -2,7 +2,7 @@
 
 Testing is done using Hardhat.
 
-Some exaples of commands to try out:
+Some examples of commands to try out:
 
 ```shell
 npx hardhat help
