@@ -17,21 +17,21 @@ contract Lottery {
 
     enum State { OPEN, CLOSED }
 
-    State private state;
+    State private state;                                                        /* Lottery is open or closed? */
 
-    uint256 private round;
-    uint256 private random;
-    uint256 private fee_balance;
-    uint256 private pot_balance;
+    uint256 private round;                                                      /* Current round number */
+    uint256 private random;                                                     /* Partial random number used to choose winner */
+    uint256 private fee_balance;                                                /* Accumulated fees that belong to the owner */
+    uint256 private pot_balance;                                                /* Accumulated round prize */
 
-    address private owner;
-    uint256 private owner_fee;
-    uint256 private ticket_price;
+    address private owner;                                                      /* Owner's address */
+    uint256 private owner_fee;                                                  /* Number between 1 and 100, indicates fee percentage */
+    uint256 private ticket_price;                                               /* Ticket price */
 
-    uint256 private block_when_closed;
+    uint256 private block_when_closed;                                          /* Number of block when lottery last closed */
 
-    uint256 private number_bettors;
-    uint256 private number_contenders;
+    uint256 private number_bettors;                                             /* Number of bettors in the current round */
+    uint256 private number_contenders;                                          /* Number of contenders in the current round */
 
     mapping(uint256 => mapping(address => Player)) private bettors;
     mapping(uint256 => address[]) private contenders;
@@ -108,6 +108,13 @@ contract Lottery {
         payable(winner).transfer(pot_balance);
 
         __reset_round();
+    }
+
+    function withdraw() external {
+        require(fee_balance > 0,                            "There must be fees to withdraw.");
+        require(msg.sender == owner,                        "Only owner can withdraw");
+        payable(owner).transfer(fee_balance);
+        fee_balance = 0;
     }
 
     /* ========= INTERNAL HELPER FUNCTIONS ============== */
