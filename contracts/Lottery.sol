@@ -112,7 +112,7 @@ contract Lottery {
 
     function withdraw() external {
         require(fee_balance > 0,                            "There must be fees to withdraw.");
-        require(msg.sender == owner,                        "Only owner can withdraw");
+        require(msg.sender == owner,                        "Only owner can withdraw.");
         payable(owner).transfer(fee_balance);
         fee_balance = 0;
     }
